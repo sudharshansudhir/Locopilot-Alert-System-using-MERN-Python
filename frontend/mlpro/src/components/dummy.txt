@@ -1,0 +1,1106 @@
+// backend/models/Train.js
+import mongoose from "mongoose";
+
+const trainSchema = new mongoose.Schema({
+  trainNumber: String,
+  startLocation: String,
+  endLocation: String,
+  date: String,
+  departureTime: String,
+  arrivalTime: String,
+  currentTrack: String,
+  currentDistance: { type: Number, default: 0 }, // distance on that track
+  status: { type: String, default: "On Schedule" },
+  locopilotId: String, // pilot unique id
+  currentLat: Number,
+  currentLng: Number,
+});
+
+const Train = mongoose.model("Train", trainSchema);
+export default Train;
+
+
+import mongoose from "mongoose";
+
+const userSchema = new mongoose.Schema({
+  name: { type: String, required: true },
+  email: { type: String, required: true, unique: true },
+  password: { type: String, required: true },
+});
+
+const User = mongoose.model("User", userSchema);
+export default User;
+
+
+# backend/python/collisionPredictor.py
+import sys, json, math
+from datetime import datetime
+
+def calculate_distance(lat1, lon1, lat2, lon2):
+    R = 6371  # km
+    dLat = math.radians(lat2 - lat1)
+    dLon = math.radians(lon2 - lon1)
+    a = math.sin(dLat/2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dLon/2)**2
+    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a)) * 1000  # meters
+
+def time_diff_minutes(t1, t2):
+    try:
+        if len(t1) == 5: t1 = "2025-10-05T" + t1 + ":00"
+        if len(t2) == 5: t2 = "2025-10-05T" + t2 + ":00"
+        return abs((datetime.fromisoformat(t1) - datetime.fromisoformat(t2)).total_seconds() / 60)
+    except:
+        return 9999
+
+def detect_collisions(trains):
+    collisions = []
+    for i in range(len(trains)):
+        for j in range(i + 1, len(trains)):
+            t1, t2 = trains[i], trains[j]
+
+            track1 = t1.get("currentTrack") or ""
+            track2 = t2.get("currentTrack") or ""
+            if not track1 or not track2:
+                continue
+
+            if track1 == track2:
+                lat1, lon1 = t1.get("currentLat", 0), t1.get("currentLng", 0)
+                lat2, lon2 = t2.get("currentLat", 0), t2.get("currentLng", 0)
+                dist = calculate_distance(lat1, lon1, lat2, lon2)
+                eta_diff = time_diff_minutes(t1.get("arrivalTime", "2099-01-01T00:00:00"), t2.get("arrivalTime", "2099-01-01T00:00:00"))
+
+                # Collision condition
+                if dist < 1000 and eta_diff < 10:
+                    collisions.append({
+                        "train1": t1.get("trainNumber"),
+                        "train2": t2.get("trainNumber"),
+                        "track": track1,
+                        "distanceDiff_m": round(dist, 2),
+                        "etaDiff_min": round(eta_diff, 2)
+                    })
+    return collisions
+
+if __name__ == "__main__":
+    try:
+        data = json.loads(sys.argv[1])
+        print(json.dumps(detect_collisions(data)))
+    except Exception as e:
+        print("PY ERR:", str(e))
+
+
+import express from "express";
+import bcrypt from "bcryptjs";
+import jwt from "jsonwebtoken";
+import User from "../models/User.js";
+
+const router = express.Router();
+const JWT_SECRET = "locopilot_secret_key"; // 🔒 use .env in production
+
+// 🧾 Register
+router.post("/register", async (req, res) => {
+  try {
+    const { name, email, password } = req.body;
+    if (!name || !email || !password)
+      return res.status(400).json({ msg: "All fields required" });
+
+    const existingUser = await User.findOne({ email });
+    if (existingUser)
+      return res.status(400).json({ msg: "User already exists" });
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    const newUser = await User.create({ name, email, password: hashedPassword });
+    res.status(201).json({ msg: "User registered successfully" });
+  } catch (err) {
+    res.status(500).json({ msg: err.message });
+  }
+});
+
+// 🔐 Login
+router.post("/login", async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    const user = await User.findOne({ email });
+    if (!user) return res.status(400).json({ msg: "User not found" });
+
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch) return res.status(400).json({ msg: "Invalid password" });
+
+    const token = jwt.sign({ id: user._id }, JWT_SECRET, { expiresIn: "1h" });
+    res.json({
+      msg: "Login successful",
+      token,
+      user: { id: user._id, name: user.name, email: user.email },
+    });
+  } catch (err) {
+    res.status(500).json({ msg: err.message });
+  }
+});
+
+export default router;
+
+
+// backend/routes/collisionRoutes.js
+const express = require("express");
+const router = express.Router();
+const checkCollision = require("../services/collisionDetector");
+
+router.get("/", async (req, res) => {
+  try {
+    const locopilotId = req.query.locopilotId;
+    const collisions = await checkCollision();
+    // Filter collisions relevant to given locopilotId if provided
+    const relevant = locopilotId ? collisions.filter(
+      c => c.t1.locopilotId === locopilotId || c.t2.locopilotId === locopilotId
+    ) : collisions;
+    res.json(relevant);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to check collisions" });
+  }
+});
+
+module.exports = router;
+
+
+// backend/routes/geoRoutes.js
+import express from "express"
+const router = express.Router();
+
+// Dummy geocode endpoint
+router.get("/geocode", (req, res) => {
+  const place = req.query.place || "";
+  // returns Coimbatore for demo; replace with real geocode later
+  res.json({ coordinates: [11.0168, 76.9558] });
+});
+
+// Dummy matrix endpoint
+router.post("/matrix", (req, res) => {
+  res.json({ distances: [[0, 12000]], durations: [[0, 900]] });
+});
+
+module.exports = router;
+
+
+// backend/routes/trainRoutes.js
+import express from "express";
+import Train from "../models/Train.js";
+
+const router = express.Router();
+
+// 🔹 Add new train
+router.post("/add", async (req, res) => {
+  try {
+    const body = req.body;
+    if (!body.locopilotId)
+      return res.status(400).json({ error: "locopilotId is required" });
+
+    const newTrain = new Train(body);
+    await newTrain.save();
+
+    const io = req.app.get("io");
+    if (io) io.emit("trains:update", await Train.find());
+
+    res.json(newTrain);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 🔹 Get all trains
+router.get("/", async (req, res) => {
+  try {
+    const trains = await Train.find();
+    res.json(trains);
+  } catch (err) {
+    res.status(500).json({ error: "Failed to fetch trains" });
+  }
+});
+
+// 🔹 Update train
+router.put("/update/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { locopilotId } = req.body;
+
+    const train = await Train.findById(id);
+    if (!train) return res.status(404).json({ error: "Train not found" });
+
+    if (train.locopilotId !== locopilotId)
+      return res.status(403).json({ error: "Unauthorized: Not your train" });
+
+    const updatedTrain = await Train.findByIdAndUpdate(id, req.body, { new: true });
+
+    const io = req.app.get("io");
+    if (io) io.to(locopilotId).emit("trains:update", [updatedTrain]);
+
+    res.json(updatedTrain);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to update train" });
+  }
+});
+
+
+// 🔹 Delete train
+router.delete("/delete/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { locopilotId } = req.query;
+
+    const train = await Train.findById(id);
+    if (!train) return res.status(404).json({ error: "Train not found" });
+
+    if (train.locopilotId !== locopilotId)
+      return res.status(403).json({ error: "Unauthorized: Not your train" });
+
+    await Train.findByIdAndDelete(id);
+
+    const io = req.app.get("io");
+    if (io) io.to(locopilotId).emit("trains:update", []);
+
+    res.json({ message: "Deleted successfully" });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to delete train" });
+  }
+});
+
+
+export default router;
+
+
+import { spawn } from "child_process";
+import path from "path";
+import { fileURLToPath } from "url";
+import Train from "../models/Train.js";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+export async function checkCollision() {
+  try {
+    const trains = await Train.find();
+    if (trains.length < 2) return [];
+
+    return new Promise((resolve, reject) => {
+      const pythonScript = path.join(__dirname, "../python/collisionPredictor.py");
+
+      const python = spawn("python", [pythonScript, JSON.stringify(trains)]);
+
+      let result = "";
+      let error = "";
+
+      python.stdout.on("data", (data) => result += data.toString());
+      python.stderr.on("data", (data) => error += data.toString());
+
+      python.on("close", (code) => {
+        if (code !== 0) {
+          console.error("Python exited with code", code, error);
+          reject(error);
+        } else {
+          try {
+            const parsed = JSON.parse(result.trim());
+
+            // map train numbers to locopilotIds
+            const collisionsWithIds = parsed.map(c => {
+              const t1 = trains.find(t => t.trainNumber === c.train1);
+              const t2 = trains.find(t => t.trainNumber === c.train2);
+              return {
+                ...c,
+                locopilot1: t1?.locopilotId,
+                locopilot2: t2?.locopilotId
+              };
+            });
+
+            resolve(collisionsWithIds);
+          } catch (err) {
+            console.error("Error parsing Python output:", result, err);
+            resolve([]);
+          }
+        }
+      });
+    });
+  } catch (err) {
+    console.error("Error in checkCollision:", err.message);
+    return [];
+  }
+}
+
+// backend/services/trainPositionUpdater.js
+// const Train = require("../models/Train");
+import Train from "../models/Train.js"
+
+// Dummy simulator: update random positions for testing
+async function updateTrainPositions() {
+  try {
+    const trains = await Train.find();
+    for (const t of trains) {
+      // simulate small movement if lat/lng present else set near base
+      const baseLat = t.currentLat || 11.0168;
+      const baseLng = t.currentLng || 76.9558;
+      t.currentLat = baseLat + (Math.random() - 0.5) * 0.002;
+      t.currentLng = baseLng + (Math.random() - 0.5) * 0.002;
+      t.currentDistance = Math.max(0, (t.currentDistance || 0) + (Math.random() - 0.5) * 20);
+      await t.save();
+    }
+    console.log("Updated positions for simulation");
+  } catch (err) {
+    console.error("Error updating train positions:", err);
+  }
+}
+
+module.exports = updateTrainPositions;
+
+// backend/server.js
+import express from "express";
+import http from "http";
+import cors from "cors";
+import mongoose from "mongoose";
+import { Server } from "socket.io";
+import trainRoutes from "./routes/trainRoutes.js";
+import { checkCollision } from "./services/collisionDetector.js";
+
+const app = express();
+const server = http.createServer(app);
+
+app.use(
+  cors({
+    origin: "http://localhost:5173",
+    methods: ["GET", "POST", "PUT", "DELETE"],
+  })
+);
+app.use(express.json());
+
+// MongoDB connection
+mongoose
+  .connect("mongodb://127.0.0.1:27017/trainDB")
+  .then(() => console.log("✅ MongoDB Connected"))
+  .catch((err) => console.error("❌ MongoDB Connection Error:", err));
+
+// Socket setup
+const io = new Server(server, {
+  cors: {
+    origin: "http://localhost:5173",
+    methods: ["GET", "POST"],
+  },
+});
+
+app.set("io", io);
+app.use("/api/trains", trainRoutes);
+
+// 🔹 Store pilot sockets
+io.on("connection", (socket) => {
+  console.log("🟢 Socket connected:", socket.id);
+
+  socket.on("joinLocopilot", (locopilotId) => {
+    socket.join(locopilotId);
+    console.log(`👨‍✈️ Locopilot ${locopilotId} joined room`);
+  });
+
+  socket.on("disconnect", () =>
+    console.log("🔴 Socket disconnected:", socket.id)
+  );
+});
+
+// 🔹 Collision check every 5 seconds
+setInterval(async () => {
+  try {
+    const collisions = await checkCollision();
+    if (collisions.length > 0) {
+      collisions.forEach((c) => {
+        io.to(c.locopilot1)
+          .to(c.locopilot2)
+          .emit("collisionAlert", {
+            train1: c.train1,
+            train2: c.train2,
+            track: c.track,
+            distanceMeters: c.distanceDiff_m,
+            etaDiffMinutes: c.etaDiff_min,
+          });
+        console.log(`⚠️ Collision alert sent to ${c.locopilot1} & ${c.locopilot2}`);
+      });
+    }
+  } catch (err) {
+    console.error("❌ Collision check error:", err);
+  }
+}, 5000);
+
+const PORT = 5000;
+server.listen(PORT, () => console.log(`🚆 Server running on port ${PORT}`));
+
+
+// frontend/src/api/api.js
+const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:5000/api/trains";
+
+// ✅ Fetch all trains
+export async function fetchTrains() {
+  const res = await fetch(BASE_URL);
+  return res.json();
+}
+
+// ✅ Add new train
+export async function addTrain(data) {
+  const res = await fetch(`${BASE_URL}/add`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  return res.json();
+}
+
+// ✅ Update existing train
+export async function updateTrain(id, data) {
+  const res = await fetch(`${BASE_URL}/update/${id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  return res.json();
+}
+
+// ✅ Update location (used by geolocation)
+export async function updateLocation(id, data) {
+  const res = await fetch(`${BASE_URL}/location/${id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  return res.json();
+}
+
+
+// frontend/src/pages/Dashboard.jsx
+import React, { useEffect, useState } from "react";
+import io from "socket.io-client";
+import { fetchTrains, updateTrain, addTrain } from "../api/api";
+import Swal from "sweetalert2";
+
+const socket = io("http://localhost:5000");
+
+export default function Dashboard() {
+  const [trains, setTrains] = useState([]);
+  const [editing, setEditing] = useState(null);
+  const [form, setForm] = useState({
+    trainNumber: "",
+    startLocation: "",
+    endLocation: "",
+    currentTrack: "",
+    currentDistance: "",
+  });
+
+  // ✅ Fetch initial trains
+  useEffect(() => {
+    loadTrains();
+    socket.on("trains:update", (data) => setTrains(data)); // Real-time update
+    return () => socket.off("trains:update");
+  }, []);
+
+  const loadTrains = async () => {
+    const data = await fetchTrains();
+    setTrains(data);
+  };
+
+  const handleChange = (e) =>
+    setForm({ ...form, [e.target.name]: e.target.value });
+
+  const handleEdit = (train) => {
+    setEditing(train._id);
+    setForm(train);
+  };
+
+  const handleUpdate = async () => {
+    try {
+      await updateTrain(editing, form);
+      Swal.fire("Success", "Train updated successfully!", "success");
+      setEditing(null);
+      setForm({
+        trainNumber: "",
+        startLocation: "",
+        endLocation: "",
+        currentTrack: "",
+        currentDistance: "",
+      });
+      // No need to call loadTrains() — socket will update it
+    } catch (err) {
+      Swal.fire("Error", "Failed to update train", "error");
+    }
+  };
+
+  const handleDelete = async (id) => {
+    try {
+      const res = await fetch(`http://localhost:5000/api/trains/delete/${id}`, {
+        method: "DELETE",
+      });
+      await res.json();
+      Swal.fire("Deleted!", "Train removed successfully", "success");
+      // Socket.io auto refreshes
+    } catch (err) {
+      Swal.fire("Error", "Failed to delete train", "error");
+    }
+  };
+
+  return (
+    <div className="p-8 bg-green-50 min-h-screen">
+      <h1 className="text-3xl font-bold text-green-700 mb-6">🚆 Dashboard</h1>
+
+      {/* Form */}
+      <div className="bg-white p-4 rounded shadow-md mb-8">
+        <h2 className="text-xl font-semibold mb-4">
+          {editing ? "Edit Train" : "Add Train"}
+        </h2>
+
+        <div className="grid grid-cols-2 gap-4">
+          <input
+            name="trainNumber"
+            placeholder="Train Number"
+            value={form.trainNumber}
+            onChange={handleChange}
+            className="border p-2 rounded"
+          />
+          <input
+            name="startLocation"
+            placeholder="Start Location"
+            value={form.startLocation}
+            onChange={handleChange}
+            className="border p-2 rounded"
+          />
+          <input
+            name="endLocation"
+            placeholder="End Location"
+            value={form.endLocation}
+            onChange={handleChange}
+            className="border p-2 rounded"
+          />
+          <input
+            name="currentTrack"
+            placeholder="Current Track"
+            value={form.currentTrack}
+            onChange={handleChange}
+            className="border p-2 rounded"
+          />
+          <input
+            name="currentDistance"
+            placeholder="Distance (m)"
+            value={form.currentDistance}
+            onChange={handleChange}
+            className="border p-2 rounded"
+          />
+        </div>
+
+        <div className="mt-4 flex gap-2">
+          {editing ? (
+            <button
+              onClick={handleUpdate}
+              className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700"
+            >
+              Update
+            </button>
+          ) : (
+            <button
+              onClick={async () => {
+                await addTrain(form);
+                Swal.fire("Success", "Train added successfully!", "success");
+                setForm({
+                  trainNumber: "",
+                  startLocation: "",
+                  endLocation: "",
+                  currentTrack: "",
+                  currentDistance: "",
+                });
+              }}
+              className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
+            >
+              Add
+            </button>
+          )}
+          {editing && (
+            <button
+              onClick={() => {
+                setEditing(null);
+                setForm({
+                  trainNumber: "",
+                  startLocation: "",
+                  endLocation: "",
+                  currentTrack: "",
+                  currentDistance: "",
+                });
+              }}
+              className="bg-gray-500 text-white px-4 py-2 rounded"
+            >
+              Cancel
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Table */}
+      <table className="min-w-full bg-white rounded shadow-md">
+        <thead className="bg-green-600 text-white">
+          <tr>
+            <th className="py-2 px-4">Train</th>
+            <th className="py-2 px-4">From</th>
+            <th className="py-2 px-4">To</th>
+            <th className="py-2 px-4">Track</th>
+            <th className="py-2 px-4">Distance (m)</th>
+            <th className="py-2 px-4">Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          {trains.map((train) => (
+            <tr key={train._id} className="text-center border-b">
+              <td className="py-2">{train.trainNumber}</td>
+              <td>{train.startLocation}</td>
+              <td>{train.endLocation}</td>
+              <td>{train.currentTrack}</td>
+              <td>{train.currentDistance}</td>
+              <td>
+                <button
+                  onClick={() => handleEdit(train)}
+                  className="bg-yellow-400 px-3 py-1 rounded mr-2"
+                >
+                  Edit
+                </button>
+                <button
+                  onClick={() => handleDelete(train._id)}
+                  className="bg-red-500 px-3 py-1 rounded text-white"
+                >
+                  Delete
+                </button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+
+// frontend/src/components/Navbar.jsx
+import React from "react";
+import { NavLink } from "react-router-dom";
+
+export default function Navbar() {
+  const linkClass = ({ isActive }) =>
+    `px-4 py-2 rounded-md hover:bg-green-100 transition-colors ${
+      isActive ? "border-b-2 border-green-600 font-semibold text-green-800" : "text-green-700"
+    }`;
+
+  return (
+    <nav className="bg-green-50 shadow-md sticky top-0 z-50">
+      <div className="max-w-7xl mx-auto flex justify-between items-center p-4">
+        <div className="text-2xl font-bold text-green-700">LocoPilot-DashBoard</div>
+        <div className="flex space-x-4">
+          <NavLink to="/" className={linkClass}>Home</NavLink>
+          <NavLink to="/dashboard" className={linkClass}>Dashboard</NavLink>
+          <NavLink to="/profile" className={linkClass}>Profile</NavLink>
+        </div>
+      </div>
+    </nav>
+  );
+}
+
+
+// frontend/src/pages/DashboardPage.jsx
+import React from "react";
+import Navbar from "../components/Navbar";
+import Dashboard from "../components/Dashboard";
+
+export default function DashboardPage() {
+  return (
+    <div className="min-h-screen bg-green-50">
+      <Navbar />
+      <div className="max-w-6xl mx-auto p-6">
+        <Dashboard />
+      </div>
+    </div>
+  );
+}
+
+
+import React, { useEffect, useRef, useState } from "react";
+import Navbar from "../components/Navbar";
+import { useNavigate } from "react-router-dom";
+
+export default function HomePage() {
+  const [visible, setVisible] = useState(false);
+  const contentRef = useRef(null);
+  const navigate = useNavigate();
+
+  // Redirect to login if not logged in
+  useEffect(() => {
+    const token = localStorage.getItem("token");
+    if (!token) navigate("/login");
+  }, [navigate]);
+
+  useEffect(() => {
+    const observer = new IntersectionObserver(
+      ([entry]) => setVisible(entry.isIntersecting),
+      { threshold: 0.2 }
+    );
+    if (contentRef.current) observer.observe(contentRef.current);
+    return () => observer.disconnect();
+  }, []);
+
+  return (
+    <div className="relative min-h-screen bg-green-50 overflow-hidden">
+      <Navbar />
+      <video
+        autoPlay
+        muted
+        loop
+        className="absolute inset-0 w-full h-full object-cover opacity-80"
+      >
+        <source src="/trainv.mp4" type="video/mp4" />
+      </video>
+
+      <div className="absolute inset-0 bg-green-900/40"></div>
+
+      <div
+        ref={contentRef}
+        className={`relative z-10 flex flex-col items-center justify-center h-[calc(100vh-4rem)] text-center text-white px-4 transition-all duration-1000 ${
+          visible ? "opacity-100 translate-y-0" : "opacity-0 translate-y-10"
+        }`}
+      >
+        <h1 className="text-5xl md:text-6xl font-extrabold mb-4 drop-shadow-lg">
+          Welcome to <span className="text-green-300">LocoPilot</span> Live
+        </h1>
+        <p className="text-lg md:text-xl max-w-2xl mb-6">
+          Your AI-powered train safety and collision prevention dashboard.
+        </p>
+        <a
+          href="/dashboard"
+          className="bg-green-500 hover:bg-green-600 text-white px-6 py-3 rounded-lg font-semibold shadow-lg transition transform hover:scale-105"
+        >
+          Go to Dashboard
+        </a>
+      </div>
+    </div>
+  );
+}
+
+
+import React, { useState, useEffect } from "react";
+import axios from "axios";
+import { useNavigate } from "react-router-dom";
+import Swal from "sweetalert2";
+import { FaEye, FaEyeSlash } from "react-icons/fa";
+
+export default function LoginPage() {
+  const [form, setForm] = useState({ email: "", password: "" });
+  const [showPassword, setShowPassword] = useState(false);
+  const navigate = useNavigate();
+
+  // If already logged in, redirect to home
+  useEffect(() => {
+    const token = localStorage.getItem("token");
+    if (token) navigate("/home");
+  }, [navigate]);
+
+  const handleChange = (e) =>
+    setForm({ ...form, [e.target.name]: e.target.value });
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+
+    if (!form.email || !form.password) {
+      return Swal.fire("Error", "All fields are required!", "error");
+    }
+
+    try {
+      const res = await axios.post("http://localhost:5000/api/auth/login", form);
+      localStorage.setItem("token", res.data.token);
+      localStorage.setItem("user", JSON.stringify(res.data.user));
+
+      Swal.fire({
+        icon: "success",
+        title: "Login successful!",
+        showConfirmButton: false,
+        timer: 1500,
+      });
+
+      navigate("/home");
+    } catch (err) {
+      Swal.fire("Error", err.response?.data?.msg || "Login failed", "error");
+    }
+  };
+
+  return (
+    <div className="flex items-center justify-center min-h-screen bg-green-100">
+      <form
+        onSubmit={handleSubmit}
+        className="bg-white p-8 rounded-lg shadow-lg w-96 border border-green-200"
+      >
+        <h2 className="text-3xl font-bold text-green-700 mb-6 text-center">
+          🚆 LocoPilot Login
+        </h2>
+
+        {/* Email Input */}
+        <div className="mb-4">
+          <input
+            type="email"
+            name="email"
+            placeholder="Email"
+            value={form.email}
+            onChange={handleChange}
+            className="w-full border border-green-300 p-2 rounded focus:outline-none focus:ring-2 focus:ring-green-500"
+          />
+        </div>
+
+        {/* Password Input with Eye */}
+        <div className="mb-4 relative">
+          <input
+            type={showPassword ? "text" : "password"}
+            name="password"
+            placeholder="Password"
+            value={form.password}
+            onChange={handleChange}
+            className="w-full border border-green-300 p-2 rounded focus:outline-none focus:ring-2 focus:ring-green-500 pr-10"
+          />
+          <span
+            onClick={() => setShowPassword(!showPassword)}
+            className="absolute right-3 top-3 text-green-600 cursor-pointer"
+          >
+            {showPassword ? <FaEyeSlash /> : <FaEye />}
+          </span>
+        </div>
+
+        {/* Login Button */}
+        <button
+          type="submit"
+          className="w-full bg-green-600 text-white py-2 rounded hover:bg-green-700 transition"
+        >
+          Login
+        </button>
+
+        {/* Register Link */}
+        <p className="text-center mt-3 text-sm text-gray-700">
+          New user?{" "}
+          <a
+            href="/register"
+            className="text-green-700 font-semibold hover:underline"
+          >
+            Register
+          </a>
+        </p>
+      </form>
+    </div>
+  );
+}
+
+
+import React from "react";
+import Navbar from "../components/Navbar";
+
+export default function ProfilePage() {
+  const user = JSON.parse(localStorage.getItem("user"));
+
+  if (!user)
+    return (
+      <div className="text-center mt-20 text-red-600 text-xl">
+        Please login to view your profile.
+      </div>
+    );
+
+  return (
+    <div className="min-h-screen bg-green-50">
+      <Navbar />
+      <div className="max-w-lg mx-auto bg-white p-6 mt-12 rounded-lg shadow-md">
+        <h2 className="text-3xl font-bold text-green-700 mb-4">Your Profile</h2>
+        <p><strong>Name:</strong> {user.name}</p>
+        <p><strong>Email:</strong> {user.email}</p>
+        <button
+          onClick={() => {
+            localStorage.clear();
+            window.location.href = "/login";
+          }}
+          className="mt-6 bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700"
+        >
+          Logout
+        </button>
+      </div>
+    </div>
+  );
+}
+
+
+import React, { useState } from "react";
+import axios from "axios";
+import { useNavigate } from "react-router-dom";
+import Swal from "sweetalert2";
+import { FaEye, FaEyeSlash } from "react-icons/fa";
+
+export default function RegisterPage() {
+  const [form, setForm] = useState({
+    name: "",
+    email: "",
+    password: "",
+    confirmPassword: "",
+  });
+  const [showPass, setShowPass] = useState(false);
+  const [showConfirm, setShowConfirm] = useState(false);
+  const navigate = useNavigate();
+
+  const handleChange = (e) =>
+    setForm({ ...form, [e.target.name]: e.target.value });
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+
+    if (!form.name || !form.email || !form.password || !form.confirmPassword) {
+      return Swal.fire("Error", "All fields are required!", "error");
+    }
+    if (form.password !== form.confirmPassword) {
+      return Swal.fire("Error", "Passwords do not match!", "error");
+    }
+
+    try {
+      const res = await axios.post("http://localhost:5000/api/auth/register", {
+        name: form.name,
+        email: form.email,
+        password: form.password,
+      });
+
+      Swal.fire("Success", "Registration successful!", "success");
+      localStorage.setItem("token", res.data.token);
+      localStorage.setItem("user", JSON.stringify(res.data.user));
+      navigate("/home");
+    } catch (err) {
+      Swal.fire("Error", err.response?.data?.msg || "Registration failed", "error");
+    }
+  };
+
+  return (
+    <div className="flex items-center justify-center min-h-screen bg-green-100">
+      <form
+        onSubmit={handleSubmit}
+        className="bg-white p-8 rounded-lg shadow-md w-96 relative"
+      >
+        <h2 className="text-2xl font-bold text-green-700 mb-6 text-center">
+          LocoPilot Register
+        </h2>
+
+        <input
+          type="text"
+          name="name"
+          placeholder="Name"
+          value={form.name}
+          onChange={handleChange}
+          className="w-full border p-2 mb-4 rounded"
+        />
+
+        <input
+          type="email"
+          name="email"
+          placeholder="Email"
+          value={form.email}
+          onChange={handleChange}
+          className="w-full border p-2 mb-4 rounded"
+        />
+
+        <div className="relative mb-4">
+          <input
+            type={showPass ? "text" : "password"}
+            name="password"
+            placeholder="Password"
+            value={form.password}
+            onChange={handleChange}
+            className="w-full border p-2 rounded pr-10"
+          />
+          <span
+            className="absolute right-3 top-3 cursor-pointer text-gray-600"
+            onClick={() => setShowPass(!showPass)}
+          >
+            {showPass ? <FaEyeSlash /> : <FaEye />}
+          </span>
+        </div>
+
+        <div className="relative mb-4">
+          <input
+            type={showConfirm ? "text" : "password"}
+            name="confirmPassword"
+            placeholder="Confirm Password"
+            value={form.confirmPassword}
+            onChange={handleChange}
+            className="w-full border p-2 rounded pr-10"
+          />
+          <span
+            className="absolute right-3 top-3 cursor-pointer text-gray-600"
+            onClick={() => setShowConfirm(!showConfirm)}
+          >
+            {showConfirm ? <FaEyeSlash /> : <FaEye />}
+          </span>
+        </div>
+
+        <button
+          type="submit"
+          className="w-full bg-green-600 text-white py-2 rounded hover:bg-green-700"
+        >
+          Register
+        </button>
+
+        <p className="text-center mt-3 text-sm text-gray-600">
+          Already have an account?{" "}
+          <a href="/login" className="text-green-700 font-semibold">
+            Login
+          </a>
+        </p>
+      </form>
+    </div>
+  );
+}
+
+
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import HomePage from "./pages/HomePage";
+import LoginPage from "./pages/LoginPage";
+import RegisterPage from "./pages/RegisterPage";
+import ProfilePage from "./pages/ProfilePage";
+import Dashboard from "./pages/DashboardPage"; // your dashboard page
+
+const PrivateRoute = ({ children }) => {
+  const token = localStorage.getItem("token");
+  return token ? children : <Navigate to="/login" />;
+};
+
+export default function App() {
+  return (
+    <BrowserRouter>
+      <Routes>
+        <Route path="/login" element={<LoginPage />} />
+        <Route path="/register" element={<RegisterPage />} />
+
+        <Route
+          path="/home"
+          element={
+            <PrivateRoute>
+              <HomePage />
+            </PrivateRoute>
+          }
+        />
+
+        <Route
+          path="/dashboard"
+          element={
+            <PrivateRoute>
+              <Dashboard />
+            </PrivateRoute>
+          }
+        />
+
+        <Route
+          path="/profile"
+          element={
+            <PrivateRoute>
+              <ProfilePage />
+            </PrivateRoute>
+          }
+        />
+
+        <Route path="*" element={<Navigate to="/login" />} />
+      </Routes>
+    </BrowserRouter>
+  );
+}
+
+
