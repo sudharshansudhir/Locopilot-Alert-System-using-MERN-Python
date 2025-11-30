@@ -133,20 +133,22 @@ export default function Dashboard() {
       } else {
         const res = await addTrain({ ...form, locopilotId });
         Swal.fire("✅ Train Added!");
-        if (res && res._id) setMyTrain(res);
+        if (res && res._id) {setMyTrain(res)
+          setForm((f) => ({ ...f, currentTrack: res.currentTrack, currentDistance: res.currentDistance }));
+        };
       }
 
-      setForm({
-        trainNumber: "",
-        startLocation: "",
-        endLocation: "",
-        date: "",
-        departureTime: "",
-        arrivalTime: "",
-        currentTrack: "",
-        currentDistance: 0,
-        status: "On Schedule",
-      });
+      // setForm({
+      //   trainNumber: "",
+      //   startLocation: "",
+      //   endLocation: "",
+      //   date: "",
+      //   departureTime: "",
+      //   arrivalTime: "",
+      //   currentTrack: "",
+      //   currentDistance: 0,
+      //   status: "On Schedule",
+      // });
       setEditingId(null);
       loadTrains();
     } catch (err) {
@@ -166,7 +168,7 @@ export default function Dashboard() {
       departureTime: t.departureTime,
       arrivalTime: t.arrivalTime,
       currentTrack: t.currentTrack,
-      currentDistance: t.currentDistance || 0,
+      currentDistance: t.currentDistance,
       status: t.status || "On Schedule",
     });
     setEditingId(t._id);
