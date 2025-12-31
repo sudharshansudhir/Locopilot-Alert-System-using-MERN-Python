@@ -15,7 +15,7 @@ dotenv.config()
 const app = express();
 const server = http.createServer(app);
 
-app.use(cors({ origin: "http://localhost:5173", methods: ["GET", "POST", "PUT", "DELETE"] }));
+app.use(cors({ origin: "https://locopilot-alert-system-using-mern-p.vercel.app", methods: ["GET", "POST", "PUT", "DELETE"] }));
 app.use(express.json());
 
 mongoose
@@ -24,7 +24,7 @@ mongoose
   .catch((err) => console.error("❌ MongoDB Connection Error:", err));
 
 const io = new Server(server, {
-  cors: { origin: "http://localhost:5173", methods: ["GET", "POST"] },
+  cors: { origin: "https://locopilot-alert-system-using-mern-p.vercel.app", methods: ["GET", "POST"] },
 });
 
 app.set("io", io);
