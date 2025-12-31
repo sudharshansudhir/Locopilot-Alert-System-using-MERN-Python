@@ -3,6 +3,7 @@ import axios from "axios";
 import { NavLink, useNavigate } from "react-router-dom";
 import Swal from "sweetalert2";
 import { FaEye, FaEyeSlash } from "react-icons/fa";
+const API_BASE=import.meta.env.VITE_API_URL
 
 export default function LoginPage() {
   const [form, setForm] = useState({ email: "", password: "" });
@@ -26,7 +27,7 @@ export default function LoginPage() {
     }
 
     try {
-      const res = await axios.post("http://localhost:5000/api/auth/login", form);
+      const res = await axios.post(`${API_BASE}/api/auth/login`, form);
       localStorage.setItem("token", res.data.token);
       localStorage.setItem("user", JSON.stringify(res.data.user));
 
