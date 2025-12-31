@@ -1,4 +1,4 @@
-// backend/middleware/auth.js
+// backend/middleware/auth.js...
 import jwt from "jsonwebtoken";
 
 const JWT_SECRET = "locopilot_secret_key"; // same as your auth/login file
