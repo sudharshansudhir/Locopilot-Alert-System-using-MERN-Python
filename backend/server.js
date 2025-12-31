@@ -8,6 +8,9 @@ import trainRoutes from "./routes/trainRoutes.js";
 import authRoutes from "./routes/authRoutes.js";
 import { checkCollision } from "./services/collisionDetector.js";
 import Train from "./models/Train.js";
+import dotenv from "dotenv"
+dotenv.config()
+
 
 const app = express();
 const server = http.createServer(app);
@@ -16,7 +19,7 @@ app.use(cors({ origin: "http://localhost:5173", methods: ["GET", "POST", "PUT", 
 app.use(express.json());
 
 mongoose
-  .connect("mongodb://127.0.0.1:27017/trainDB")
+  .connect(process.env.MONGO_URI)
   .then(() => console.log("✅ MongoDB Connected"))
   .catch((err) => console.error("❌ MongoDB Connection Error:", err));
 
