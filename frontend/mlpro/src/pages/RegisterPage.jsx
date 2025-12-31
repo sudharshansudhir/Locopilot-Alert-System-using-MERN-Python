@@ -1,9 +1,9 @@
 import React, { useState } from "react";
 import axios from "axios";
-import { useNavigate } from "react-router-dom";
+import { NavLink, useNavigate } from "react-router-dom";
 import Swal from "sweetalert2";
 import { FaEye, FaEyeSlash } from "react-icons/fa";
-
+const API_BASE=import.meta.env.VITE_API_URL
 export default function RegisterPage() {
   const [form, setForm] = useState({
     name: "",
@@ -29,7 +29,7 @@ export default function RegisterPage() {
     }
 
     try {
-      const res = await axios.post("http://localhost:5000/api/auth/register", {
+      const res = await axios.post(`${API_BASE}/api/auth/register`, {
         name: form.name,
         email: form.email,
         password: form.password,
@@ -115,9 +115,9 @@ export default function RegisterPage() {
 
         <p className="text-center mt-3 text-sm text-gray-600">
           Already have an account?{" "}
-          <a href="/login" className="text-green-700 font-semibold">
+          <NavLink to="/login" className="text-green-700 font-semibold">
             Login
-          </a>
+          </NavLink>
         </p>
       </form>
     </div>

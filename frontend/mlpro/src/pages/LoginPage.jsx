@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import axios from "axios";
-import { useNavigate } from "react-router-dom";
+import { NavLink, useNavigate } from "react-router-dom";
 import Swal from "sweetalert2";
 import { FaEye, FaEyeSlash } from "react-icons/fa";
 
@@ -94,12 +94,12 @@ export default function LoginPage() {
         {/* Register Link */}
         <p className="text-center mt-3 text-sm text-gray-700">
           New user?{" "}
-          <a
-            href="/register"
+          <NavLink
+            to="/register"
             className="text-green-700 font-semibold hover:underline"
           >
             Register
-          </a>
+          </NavLink>
         </p>
       </form>
     </div>
